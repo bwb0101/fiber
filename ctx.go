@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/gofiber/fiber/v2/internal/schema"
 	"github.com/gofiber/fiber/v2/utils"
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 
 	"github.com/valyala/bytebufferpool"
 	"github.com/valyala/fasthttp"
