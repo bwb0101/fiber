@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2/utils"
+	"github.com/valyala/fasthttp/zzz/mime/multipart"
 
 	"github.com/valyala/fasthttp"
 )
