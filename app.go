@@ -25,6 +25,7 @@ import (
 
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/utils"
+	"github.com/valyala/fasthttp/zzz"
 
 	"github.com/valyala/fasthttp"
 )
@@ -1076,6 +1077,7 @@ func (app *App) serverErrorHandler(fctx *fasthttp.RequestCtx, err error) {
 	)
 
 	switch {
+	case errors.As(err, new(*zzz.FastHttpMyHeaderCheckError)):
 	case errors.As(err, new(*fasthttp.ErrSmallBuffer)):
 		err = ErrRequestHeaderFieldsTooLarge
 	case errors.As(err, &errNetOP) && errNetOP.Timeout():
