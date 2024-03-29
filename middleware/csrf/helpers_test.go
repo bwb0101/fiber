@@ -1,4 +1,4 @@
-package cors
+package csrf
 
 import (
 	"testing"
@@ -6,17 +6,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// go test -run -v Test_NormalizeOrigin
-func Test_NormalizeOrigin(t *testing.T) {
+// go test -run -v Test_normalizeOrigin
+func Test_normalizeOrigin(t *testing.T) {
 	testCases := []struct {
 		origin         string
 		expectedValid  bool
 		expectedOrigin string
 	}{
-		{"http://example.com", true, "http://example.com"},            // Simple case should work.
-		{"http://example.com/", true, "http://example.com"},           // Trailing slash should be removed.
-		{"http://example.com:3000", true, "http://example.com:3000"},  // Port should be preserved.
-		{"http://example.com:3000/", true, "http://example.com:3000"}, // Trailing slash should be removed.
+		{"http://example.com", true, "http://example.com"},                       // Simple case should work.
+		{"HTTP://EXAMPLE.COM", true, "http://example.com"},                       // Case should be normalized.
+		{"http://example.com/", true, "http://example.com"},                      // Trailing slash should be removed.
+		{"http://example.com:3000", true, "http://example.com:3000"},             // Port should be preserved.
+		{"http://example.com:3000/", true, "http://example.com:3000"},            // Trailing slash should be removed.
 		{"http://", false, ""},                                                   // Invalid origin should not be accepted.
 		{"file:///etc/passwd", false, ""},                                        // File scheme should not be accepted.
 		{"https://*example.com", false, ""},                                      // Wildcard domain should not be accepted.
@@ -52,83 +53,8 @@ func Test_NormalizeOrigin(t *testing.T) {
 	}
 }
 
-// go test -run -v Test_MatchScheme
-func Test_MatchScheme(t *testing.T) {
-	testCases := []struct {
-		domain   string
-		pattern  string
-		expected bool
-	}{
-		{"http://example.com", "http://example.com", true},           // Exact match should work.
-		{"https://example.com", "http://example.com", false},         // Scheme mismatch should matter.
-		{"http://example.com", "https://example.com", false},         // Scheme mismatch should matter.
-		{"http://example.com", "http://example.org", true},           // Different domains should not matter.
-		{"http://example.com", "http://example.com:8080", true},      // Port should not matter.
-		{"http://example.com:8080", "http://example.com", true},      // Port should not matter.
-		{"http://example.com:8080", "http://example.com:8081", true}, // Different ports should not matter.
-		{"http://localhost", "http://localhost", true},               // Localhost should match.
-		{"http://127.0.0.1", "http://127.0.0.1", true},               // IPv4 address should match.
-		{"http://[::1]", "http://[::1]", true},                       // IPv6 address should match.
-	}
-
-	for _, tc := range testCases {
-		result := matchScheme(tc.domain, tc.pattern)
-
-		if result != tc.expected {
-			t.Errorf("Expected matchScheme('%s', '%s') to be %v, but got %v", tc.domain, tc.pattern, tc.expected, result)
-		}
-	}
-}
-
-// go test -run -v Test_NormalizeDomain
-func Test_NormalizeDomain(t *testing.T) {
-	testCases := []struct {
-		input          string
-		expectedOutput string
-	}{
-		{"http://example.com", "example.com"},                     // Simple case with http scheme.
-		{"https://example.com", "example.com"},                    // Simple case with https scheme.
-		{"http://example.com:3000", "example.com"},                // Case with port.
-		{"https://example.com:3000", "example.com"},               // Case with port and https scheme.
-		{"http://example.com/path", "example.com/path"},           // Case with path.
-		{"http://example.com?query=123", "example.com?query=123"}, // Case with query.
-		{"http://example.com#fragment", "example.com#fragment"},   // Case with fragment.
-		{"example.com", "example.com"},                            // Case without scheme.
-		{"example.com:8080", "example.com"},                       // Case without scheme but with port.
-		{"sub.example.com", "sub.example.com"},                    // Case with subdomain.
-		{"sub.sub.example.com", "sub.sub.example.com"},            // Case with nested subdomain.
-		{"http://localhost", "localhost"},                         // Case with localhost.
-		{"http://127.0.0.1", "127.0.0.1"},                         // Case with IPv4 address.
-		{"http://[::1]", "[::1]"},                                 // Case with IPv6 address.
-	}
-
-	for _, tc := range testCases {
-		output := normalizeDomain(tc.input)
-
-		if output != tc.expectedOutput {
-			t.Errorf("Expected normalized domain '%s' for input '%s', but got: '%s'", tc.expectedOutput, tc.input, output)
-		}
-	}
-}
-
-// go test -v -run=^$ -bench=Benchmark_CORS_SubdomainMatch -benchmem -count=4
-func Benchmark_CORS_SubdomainMatch(b *testing.B) {
-	s := subdomain{
-		prefix: "www",
-		suffix: ".example.com",
-	}
-
-	o := "www.example.com"
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		s.match(o)
-	}
-}
-
-func Test_CORS_SubdomainMatch(t *testing.T) {
+// go test -run -v TestSubdomainMatch
+func TestSubdomainMatch(t *testing.T) {
 	tests := []struct {
 		name     string
 		sub      subdomain
@@ -191,5 +117,22 @@ func Test_CORS_SubdomainMatch(t *testing.T) {
 			got := tt.sub.match(tt.origin)
 			assert.Equal(t, tt.expected, got, "subdomain.match()")
 		})
+	}
+}
+
+// go test -v -run=^$ -bench=Benchmark_CSRF_SubdomainMatch -benchmem -count=4
+func Benchmark_CSRF_SubdomainMatch(b *testing.B) {
+	s := subdomain{
+		prefix: "www",
+		suffix: ".example.com",
+	}
+
+	o := "www.example.com"
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		s.match(o)
 	}
 }

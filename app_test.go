@@ -1316,13 +1316,11 @@ func Test_App_Group(t *testing.T) {
 	resp, err := app.Test(httptest.NewRequest(MethodPost, "/test/v1/", nil))
 	require.NoError(t, err, "app.Test(req)")
 	require.Equal(t, 200, resp.StatusCode, "Status code")
-	// require.Equal(t, "/test/v1", resp.Header.Get("Location"), "Location")
 
 	api.Get("/users", dummyHandler)
 	resp, err = app.Test(httptest.NewRequest(MethodGet, "/test/v1/UsErS", nil))
 	require.NoError(t, err, "app.Test(req)")
 	require.Equal(t, 200, resp.StatusCode, "Status code")
-	// require.Equal(t, "/test/v1/users", resp.Header.Get("Location"), "Location")
 }
 
 func Test_App_Route(t *testing.T) {
@@ -1811,7 +1809,7 @@ func Test_App_AddCustomRequestMethod(t *testing.T) {
 	require.Equal(t, "TEST", appMethods[len(appMethods)-1])
 }
 
-func TestApp_GetRoutes(t *testing.T) {
+func Test_App_GetRoutes(t *testing.T) {
 	t.Parallel()
 	app := New()
 	app.Use(func(c Ctx) error {

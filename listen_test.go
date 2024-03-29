@@ -1,4 +1,3 @@
-//nolint:wrapcheck // We must not wrap errors in tests
 package fiber
 
 import (
@@ -8,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log" //nolint:depguard // TODO: Required to capture output, use internal log package instead
 	"net"
 	"os"
 	"strings"
