@@ -21,9 +21,12 @@ go get github.com/gofiber/fiber/v3
 ```
 
 ### Zero Allocation
-Some values returned from **fiber.Ctx** are **not** immutable by default.
+Because fiber is optimized for **high-performance** care is needed when using **fiber.Ctx**:
 
-Because fiber is optimized for **high-performance**, values returned from **fiber.Ctx** are **not** immutable by default and **will** be re-used across requests. As a rule of thumb, you **must** only use context values within the handler, and you **must not** keep any references. As soon as you return from the handler, any values you have obtained from the context will be re-used in future requests and will change below your feet. Here is an example:
+- Some values returned from **fiber.Ctx** are **not** immutable by default, and **will** be re-used across requests.
+- **fiber.Ctx** is **not** thread-safe and **must not** be accessed concurrently by multiple goroutines, the immutable setting **does not** change this.
+
+As a rule of thumb, you **must** only use context values within the handler, and you **must not** keep any references. As soon as you return from the handler, any values you have obtained from the context will be re-used in future requests and will change below your feet. Here is an example:
 
 ```go
 func handler(c fiber.Ctx) error {
@@ -70,7 +73,7 @@ app := fiber.New(fiber.Config{
 })
 ```
 
-For more information, please check [**\#426**](https://github.com/gofiber/fiber/issues/426) and [**\#185**](https://github.com/gofiber/fiber/issues/185).
+For more information, please check [**\#426**](https://github.com/gofiber/fiber/issues/426), [**\#185**](https://github.com/gofiber/fiber/issues/185) and [**\#3012**](https://github.com/gofiber/fiber/issues/3012).
 
 ### Hello, World!
 
@@ -92,7 +95,7 @@ func main() {
 }
 ```
 
-```text
+```bash
 go run server.go
 ```
 
@@ -164,19 +167,15 @@ app.Get("/api/*", func(c fiber.Ctx) error {
 ### Static files
 
 To serve static files such as **images**, **CSS**, and **JavaScript** files, replace your function handler with a file or directory string.
-
+You can check out [static middleware](./middleware/static.md) for more information.
 Function signature:
-
-```go
-app.Static(prefix, root string, config ...Static)
-```
 
 Use the following code to serve files in a directory named `./public`:
 
 ```go
 app := fiber.New()
 
-app.Static("/", "./public") 
+app.Get("/*", static.New("./public")) 
 
 app.Listen(":3000")
 ```

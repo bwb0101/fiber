@@ -30,7 +30,7 @@ import (
 )
 
 // Version of current fiber package
-const Version = "3.0.0-beta.1"
+const Version = "3.0.0-beta.2"
 
 // Handler defines a function to serve HTTP requests.
 type Handler = func(Ctx) error
@@ -276,6 +276,8 @@ type Config struct {
 	// StreamRequestBody enables request body streaming,
 	// and calls the handler sooner when given body is
 	// larger than the current limit.
+	//
+	// Default: false
 	StreamRequestBody bool
 
 	// Will not pre parse Multipart Form data if set to true.
@@ -284,6 +286,8 @@ type Config struct {
 	// multipart form data as a binary blob, or choose when to parse the data.
 	//
 	// Server pre parses multipart form data by default.
+	//
+	// Default: false
 	DisablePreParseMultipartForm bool
 
 	// Aggressively reduces memory usage at the cost of higher CPU usage
@@ -295,14 +299,6 @@ type Config struct {
 	//
 	// Default: false
 	ReduceMemoryUsage bool `json:"reduce_memory_usage"`
-
-	// FEATURE: v2.3.x
-	// The router executes the same handler by default if StrictRouting or CaseSensitive is disabled.
-	// Enabling RedirectFixedPath will change this behavior into a client redirect to the original route path.
-	// Using the status code 301 for GET requests and 308 for all other request methods.
-	//
-	// Default: false
-	// RedirectFixedPath bool
 
 	// When set by an external client of Fiber it will use the provided implementation of a
 	// JSONMarshal
@@ -383,52 +379,6 @@ type Config struct {
 	//
 	// Optional. Default: false
 	EnableSplittingOnParsers bool `json:"enable_splitting_on_parsers"`
-}
-
-// Static defines configuration options when defining static assets.
-type Static struct {
-	// When set to true, the server tries minimizing CPU usage by caching compressed files.
-	// This works differently than the github.com/gofiber/compression middleware.
-	// Optional. Default value false
-	Compress bool `json:"compress"`
-
-	// When set to true, enables byte range requests.
-	// Optional. Default value false
-	ByteRange bool `json:"byte_range"`
-
-	// When set to true, enables directory browsing.
-	// Optional. Default value false.
-	Browse bool `json:"browse"`
-
-	// When set to true, enables direct download.
-	// Optional. Default value false.
-	Download bool `json:"download"`
-
-	// The name of the index file for serving a directory.
-	// Optional. Default value "index.html".
-	Index string `json:"index"`
-
-	// Expiration duration for inactive file handlers.
-	// Use a negative time.Duration to disable it.
-	//
-	// Optional. Default value 10 * time.Second.
-	CacheDuration time.Duration `json:"cache_duration"`
-
-	// The value for the Cache-Control HTTP-header
-	// that is set on the file response. MaxAge is defined in seconds.
-	//
-	// Optional. Default value 0.
-	MaxAge int `json:"max_age"`
-
-	// ModifyResponse defines a function that allows you to alter the response.
-	//
-	// Optional. Default: nil
-	ModifyResponse Handler
-
-	// Next defines a function to skip this middleware when returned true.
-	//
-	// Optional. Default: nil
-	Next func(c Ctx) bool
 }
 
 // RouteMessage is some message need to be print when server starts
@@ -595,13 +545,13 @@ func (app *App) RegisterCustomConstraint(constraint CustomConstraint) {
 	app.customConstraints = append(app.customConstraints, constraint)
 }
 
-// You can register custom binders to use as Bind().Custom("name").
+// RegisterCustomBinder Allows to register custom binders to use as Bind().Custom("name").
 // They should be compatible with CustomBinder interface.
 func (app *App) RegisterCustomBinder(binder CustomBinder) {
 	app.customBinders = append(app.customBinders, binder)
 }
 
-// You can use SetTLSHandler to use ClientHelloInfo when using TLS with Listener.
+// SetTLSHandler Can be used to set ClientHelloInfo when using TLS with Listener.
 func (app *App) SetTLSHandler(tlsHandler *TLSHandler) {
 	// Attach the tlsHandler to the config
 	app.mutex.Lock()
@@ -780,13 +730,6 @@ func (app *App) Patch(path string, handler Handler, middleware ...Handler) Route
 // Add allows you to specify multiple HTTP methods to register a route.
 func (app *App) Add(methods []string, path string, handler Handler, middleware ...Handler) Router {
 	app.register(methods, path, nil, handler, middleware...)
-
-	return app
-}
-
-// Static will create a file server serving static files
-func (app *App) Static(prefix, root string, config ...Static) Router {
-	app.registerStatic(prefix, root, config...)
 
 	return app
 }

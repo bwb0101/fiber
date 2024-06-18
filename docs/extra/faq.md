@@ -62,7 +62,7 @@ A complete example demonstrating the use of Air with Fiber can be found in the [
 
 ## How do I set up an error handler?
 
-To override the default error handler, you can override the default when providing a [Config](../api/fiber.md#config) when initiating a new [Fiber instance](../api/fiber.md#new).
+To override the default error handler, you can override the default when providing a [Config](../api/fiber.md#errorhandler) when initiating a new [Fiber instance](../api/fiber.md#new).
 
 ```go title="Example"
 app := fiber.New(fiber.Config{
@@ -86,7 +86,7 @@ Fiber currently supports 9 template engines in our [gofiber/template](https://do
 * [jet](https://docs.gofiber.io/template/jet)
 * [mustache](https://docs.gofiber.io/template/mustache)
 * [pug](https://docs.gofiber.io/template/pug)
-* [slim](https://docs.gofiber.io/template/pug)
+* [slim](https://docs.gofiber.io/template/slim)
 
 To learn more about using Templates in Fiber, see [Templates](../guide/templates.md).
 

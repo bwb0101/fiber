@@ -25,7 +25,7 @@ type routeParser struct {
 	plusCount     int             // number of plus parameters, used internally to give the plus parameter its number
 }
 
-// paramsSeg holds the segment metadata
+// routeSegment holds the segment metadata
 type routeSegment struct {
 	// const information
 	Const string // constant part of the route
@@ -427,7 +427,7 @@ func findNextCharsetPosition(search string, charset []byte) int {
 	return nextPosition
 }
 
-// findNextCharsetPosition search the last char position from the charset
+// findLastCharsetPosition search the last char position from the charset
 func findLastCharsetPosition(search string, charset []byte) int {
 	lastPosition := -1
 	for _, char := range charset {
