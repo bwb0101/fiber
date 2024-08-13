@@ -88,6 +88,8 @@ func Test_CSRF_WithSession(t *testing.T) {
 
 	// the session string is no longer be 123
 	newSessionIDString := sess.ID()
+	require.NoError(t, sess.Save())
+
 	app.AcquireCtx(ctx).Request().Header.SetCookie("_session", newSessionIDString)
 
 	// middleware config
@@ -137,7 +139,7 @@ func Test_CSRF_WithSession(t *testing.T) {
 		h(ctx)
 		token := string(ctx.Response.Header.Peek(fiber.HeaderSetCookie))
 		for _, header := range strings.Split(token, ";") {
-			if strings.Split(strings.TrimSpace(header), "=")[0] == ConfigDefault.CookieName {
+			if strings.Split(utils.Trim(header, ' '), "=")[0] == ConfigDefault.CookieName {
 				token = strings.Split(header, "=")[1]
 				break
 			}
@@ -221,6 +223,8 @@ func Test_CSRF_ExpiredToken_WithSession(t *testing.T) {
 
 	// get session id
 	newSessionIDString := sess.ID()
+	require.NoError(t, sess.Save())
+
 	app.AcquireCtx(ctx).Request().Header.SetCookie("_session", newSessionIDString)
 
 	// middleware config
@@ -244,7 +248,7 @@ func Test_CSRF_ExpiredToken_WithSession(t *testing.T) {
 	h(ctx)
 	token := string(ctx.Response.Header.Peek(fiber.HeaderSetCookie))
 	for _, header := range strings.Split(token, ";") {
-		if strings.Split(strings.TrimSpace(header), "=")[0] == ConfigDefault.CookieName {
+		if strings.Split(utils.Trim(header, ' '), "=")[0] == ConfigDefault.CookieName {
 			token = strings.Split(header, "=")[1]
 			break
 		}
@@ -896,13 +900,13 @@ func Test_CSRF_TrustedOrigins_InvalidOrigins(t *testing.T) {
 		name   string
 		origin string
 	}{
-		{"No Scheme", "localhost"},
-		{"Wildcard", "https://*"},
-		{"Wildcard domain", "https://*example.com"},
-		{"File Scheme", "file://example.com"},
-		{"FTP Scheme", "ftp://example.com"},
-		{"Port Wildcard", "http://example.com:*"},
-		{"Multiple Wildcards", "https://*.*.com"},
+		{name: "No Scheme", origin: "localhost"},
+		{name: "Wildcard", origin: "https://*"},
+		{name: "Wildcard domain", origin: "https://*example.com"},
+		{name: "File Scheme", origin: "file://example.com"},
+		{name: "FTP Scheme", origin: "ftp://example.com"},
+		{name: "Port Wildcard", origin: "http://example.com:*"},
+		{name: "Multiple Wildcards", origin: "https://*.*.com"},
 	}
 
 	for _, tt := range tests {
@@ -1089,6 +1093,8 @@ func Test_CSRF_DeleteToken_WithSession(t *testing.T) {
 
 	// the session string is no longer be 123
 	newSessionIDString := sess.ID()
+	require.NoError(t, sess.Save())
+
 	app.AcquireCtx(ctx).Request().Header.SetCookie("_session", newSessionIDString)
 
 	// middleware config

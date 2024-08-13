@@ -27,6 +27,11 @@ coverage:
 format:
 	go run mvdan.cc/gofumpt@latest -w -l .
 
+## format: 🎨 Find markdown format issues (Requires markdownlint-cli)
+.PHONY: markdown
+markdown:
+	markdownlint-cli2 "**/*.md" "#vendor"
+
 ## lint: 🚨 Run lint checks
 .PHONY: lint
 lint:
@@ -37,7 +42,17 @@ lint:
 test:
 	go run gotest.tools/gotestsum@latest -f testname -- ./... -race -count=1 -shuffle=on
 
+## longtest: 🚦 Execute all tests 10x
+.PHONY: longtest
+longtest:
+	go run gotest.tools/gotestsum@latest -f testname -- ./... -race -count=15 -shuffle=on
+
 ## tidy: 📌 Clean and tidy dependencies
 .PHONY: tidy
 tidy:
 	go mod tidy -v
+
+## betteralign: 📐 Optimize alignment of fields in structs
+.PHONY: betteralign
+betteralign:
+	go run github.com/dkorunic/betteralign/cmd/betteralign@latest -test_files -generated_files -apply ./...
