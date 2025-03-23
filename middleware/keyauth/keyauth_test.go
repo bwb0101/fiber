@@ -14,6 +14,10 @@ import (
 
 const CorrectKey = "specials: !$%,.#\"!?~`<>@$^*(){}[]|/\\123"
 
+var testConfig = fiber.TestConfig{
+	Timeout: 0,
+}
+
 func Test_AuthSources(t *testing.T) {
 	// define test cases
 	testSources := []string{"header", "cookie", "query", "param", "form"}
@@ -104,7 +108,7 @@ func Test_AuthSources(t *testing.T) {
 					req.URL.Path = r
 				}
 
-				res, err := app.Test(req, -1)
+				res, err := app.Test(req, testConfig)
 
 				require.NoError(t, err, test.description)
 
@@ -209,7 +213,7 @@ func TestMultipleKeyLookup(t *testing.T) {
 	q.Add("key", CorrectKey)
 	req.URL.RawQuery = q.Encode()
 
-	res, err := app.Test(req, -1)
+	res, err := app.Test(req, testConfig)
 
 	require.NoError(t, err)
 
@@ -226,7 +230,7 @@ func TestMultipleKeyLookup(t *testing.T) {
 	// construct a second request without proper key
 	req, err = http.NewRequestWithContext(context.Background(), fiber.MethodGet, "/foo", nil)
 	require.NoError(t, err)
-	res, err = app.Test(req, -1)
+	res, err = app.Test(req, testConfig)
 	require.NoError(t, err)
 	errBody, err := io.ReadAll(res.Body)
 	require.NoError(t, err)
@@ -350,7 +354,7 @@ func Test_MultipleKeyAuth(t *testing.T) {
 			req.Header.Set("key", test.APIKey)
 		}
 
-		res, err := app.Test(req, -1)
+		res, err := app.Test(req, testConfig)
 
 		require.NoError(t, err, test.description)
 
@@ -499,33 +503,67 @@ func Test_TokenFromContext_None(t *testing.T) {
 }
 
 func Test_TokenFromContext(t *testing.T) {
-	app := fiber.New()
-	// Wire up keyauth middleware to set TokenFromContext now
-	app.Use(New(Config{
-		KeyLookup:  "header:Authorization",
-		AuthScheme: "Basic",
-		Validator: func(_ fiber.Ctx, key string) (bool, error) {
-			if key == CorrectKey {
-				return true, nil
-			}
-			return false, ErrMissingOrMalformedAPIKey
-		},
-	}))
-	// Define a test handler that checks TokenFromContext
-	app.Get("/", func(c fiber.Ctx) error {
-		return c.SendString(TokenFromContext(c))
+	// Test that TokenFromContext returns the correct token
+	t.Run("fiber.Ctx", func(t *testing.T) {
+		app := fiber.New()
+		app.Use(New(Config{
+			KeyLookup:  "header:Authorization",
+			AuthScheme: "Basic",
+			Validator: func(_ fiber.Ctx, key string) (bool, error) {
+				if key == CorrectKey {
+					return true, nil
+				}
+				return false, ErrMissingOrMalformedAPIKey
+			},
+		}))
+		app.Get("/", func(c fiber.Ctx) error {
+			return c.SendString(TokenFromContext(c))
+		})
+
+		req := httptest.NewRequest(fiber.MethodGet, "/", nil)
+		req.Header.Add("Authorization", "Basic "+CorrectKey)
+		res, err := app.Test(req)
+		require.NoError(t, err)
+
+		body, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		require.Equal(t, CorrectKey, string(body))
 	})
 
-	req := httptest.NewRequest(fiber.MethodGet, "/", nil)
-	req.Header.Add("Authorization", "Basic "+CorrectKey)
-	// Send
-	res, err := app.Test(req)
-	require.NoError(t, err)
+	t.Run("context.Context", func(t *testing.T) {
+		app := fiber.New()
+		app.Use(New(Config{
+			KeyLookup:  "header:Authorization",
+			AuthScheme: "Basic",
+			Validator: func(_ fiber.Ctx, key string) (bool, error) {
+				if key == CorrectKey {
+					return true, nil
+				}
+				return false, ErrMissingOrMalformedAPIKey
+			},
+		}))
+		// Verify that TokenFromContext works with context.Context
+		app.Get("/", func(c fiber.Ctx) error {
+			ctx := c.Context()
+			token := TokenFromContext(ctx)
+			return c.SendString(token)
+		})
 
-	// Read the response body into a string
-	body, err := io.ReadAll(res.Body)
-	require.NoError(t, err)
-	require.Equal(t, CorrectKey, string(body))
+		req := httptest.NewRequest(fiber.MethodGet, "/", nil)
+		req.Header.Add("Authorization", "Basic "+CorrectKey)
+		res, err := app.Test(req)
+		require.NoError(t, err)
+
+		body, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		require.Equal(t, CorrectKey, string(body))
+	})
+
+	t.Run("invalid context type", func(t *testing.T) {
+		require.Panics(t, func() {
+			_ = TokenFromContext("invalid")
+		})
+	})
 }
 
 func Test_AuthSchemeToken(t *testing.T) {

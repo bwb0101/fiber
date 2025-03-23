@@ -55,7 +55,7 @@ func (app *App) mount(prefix string, subApp *App) Router {
 
 	// register mounted group
 	mountGroup := &Group{Prefix: prefix, app: subApp}
-	app.register([]string{methodUse}, prefix, mountGroup, nil)
+	app.register([]string{methodUse}, prefix, mountGroup)
 
 	// Execute onMount hooks
 	if err := subApp.hooks.executeOnMountHooks(app); err != nil {
@@ -85,7 +85,7 @@ func (grp *Group) mount(prefix string, subApp *App) Router {
 
 	// register mounted group
 	mountGroup := &Group{Prefix: groupPath, app: subApp}
-	grp.app.register([]string{methodUse}, groupPath, mountGroup, nil)
+	grp.app.register([]string{methodUse}, groupPath, mountGroup)
 
 	// Execute onMount hooks
 	if err := subApp.hooks.executeOnMountHooks(grp.app); err != nil {
@@ -188,7 +188,7 @@ func (app *App) processSubAppsRoutes() {
 				// If not, update the route's position and continue
 				route.pos = routePos
 				if !route.use || (route.use && m == 0) {
-					handlersCount += uint32(len(route.Handlers))
+					handlersCount += uint32(len(route.Handlers)) //nolint:gosec // Not a concern
 				}
 				continue
 			}
@@ -219,7 +219,7 @@ func (app *App) processSubAppsRoutes() {
 			atomic.AddUint32(&app.routesCount, ^uint32(0))
 			i--
 			// Increase the parent app's route count to account for the sub-app's routes
-			atomic.AddUint32(&app.routesCount, uint32(len(subRoutes)))
+			atomic.AddUint32(&app.routesCount, uint32(len(subRoutes))) //nolint:gosec // Not a concern
 
 			// Mark the parent app's routes as refreshed
 			app.routesRefreshed = true

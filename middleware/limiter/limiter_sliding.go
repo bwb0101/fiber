@@ -27,11 +27,11 @@ func (SlidingWindow) New(cfg Config) fiber.Handler {
 
 	// Return new handler
 	return func(c fiber.Ctx) error {
-		// Generate max from generator, if no generator was provided the default value returned is 5
-		max := cfg.MaxFunc(c)
+		// Generate maxRequests from generator, if no generator was provided the default value returned is 5
+		maxRequests := cfg.MaxFunc(c)
 
 		// Don't execute middleware if Next returns true or if the max is 0
-		if (cfg.Next != nil && cfg.Next(c)) || max == 0 {
+		if (cfg.Next != nil && cfg.Next(c)) || maxRequests == 0 {
 			return c.Next()
 		}
 
@@ -89,14 +89,14 @@ func (SlidingWindow) New(cfg Config) fiber.Handler {
 		//               ^            ^               ^          ^
 		//              ts         e.exp   End sample window   End next window
 		//               <------------>
-		// 				   resetInSec
+		// 				   Reset In Sec
 		// resetInSec = e.exp - ts - time until end of current window.
 		// duration + expiration = end of next window.
 		// Because we don't want to garbage collect in the middle of a window
 		// we add the expiration to the duration.
 		// Otherwise after the end of "sample window", attackers could launch
 		// a new request with the full window length.
-		manager.set(key, e, time.Duration(resetInSec+expiration)*time.Second)
+		manager.set(key, e, time.Duration(resetInSec+expiration)*time.Second) //nolint:gosec // Not a concern
 
 		// Unlock entry
 		mux.Unlock()
@@ -129,7 +129,7 @@ func (SlidingWindow) New(cfg Config) fiber.Handler {
 		}
 
 		// We can continue, update RateLimit headers
-		c.Set(xRateLimitLimit, strconv.Itoa(max))
+		c.Set(xRateLimitLimit, strconv.Itoa(maxRequests))
 		c.Set(xRateLimitRemaining, strconv.Itoa(remaining))
 		c.Set(xRateLimitReset, strconv.FormatUint(resetInSec, 10))
 

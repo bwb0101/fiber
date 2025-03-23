@@ -3,6 +3,7 @@ package etag
 import (
 	"bytes"
 	"hash/crc32"
+	"math"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/valyala/bytebufferpool"
@@ -56,8 +57,15 @@ func New(config ...Config) fiber.Handler {
 			bb.Write(weakPrefix)
 		}
 
+		// Write ETag
 		bb.WriteByte('"')
-		bb.B = appendUint(bb.Bytes(), uint32(len(body)))
+
+		bodyLength := len(body)
+		if bodyLength > math.MaxUint32 {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
+
+		bb.B = appendUint(bb.Bytes(), uint32(bodyLength))
 		bb.WriteByte('-')
 		bb.B = appendUint(bb.Bytes(), crc32.Checksum(body, crc32q))
 		bb.WriteByte('"')
@@ -72,7 +80,7 @@ func New(config ...Config) fiber.Handler {
 			// Check if server's ETag is weak
 			if bytes.Equal(clientEtag[2:], etag) || bytes.Equal(clientEtag[2:], etag[2:]) {
 				// W/1 == 1 || W/1 == W/1
-				c.Context().ResetBody()
+				c.RequestCtx().ResetBody()
 
 				return c.SendStatus(fiber.StatusNotModified)
 			}
@@ -84,7 +92,7 @@ func New(config ...Config) fiber.Handler {
 
 		if bytes.Contains(clientEtag, etag) {
 			// 1 == 1
-			c.Context().ResetBody()
+			c.RequestCtx().ResetBody()
 
 			return c.SendStatus(fiber.StatusNotModified)
 		}

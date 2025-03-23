@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/gofiber/fiber/v3/internal/schema"
+	"github.com/gofiber/schema"
 )
 
 // Wrap and return this for unreachable code if panicking is undesirable (i.e., in a handler).
@@ -40,7 +40,7 @@ var (
 	ErrNoHandlers = errors.New("format: at least one handler is required, but none were set")
 )
 
-// gorilla/schema errors
+// gofiber/schema errors
 type (
 	// ConversionError Conversion error exposes the internal schema.ConversionError for public use.
 	ConversionError = schema.ConversionError

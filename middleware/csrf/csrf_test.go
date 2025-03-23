@@ -70,7 +70,7 @@ func Test_CSRF_WithSession(t *testing.T) {
 	t.Parallel()
 
 	// session store
-	store := session.New(session.Config{
+	store := session.NewStore(session.Config{
 		KeyLookup: "cookie:_session",
 	})
 
@@ -156,13 +156,68 @@ func Test_CSRF_WithSession(t *testing.T) {
 	}
 }
 
+// go test -run Test_CSRF_WithSession_Middleware
+func Test_CSRF_WithSession_Middleware(t *testing.T) {
+	t.Parallel()
+	app := fiber.New()
+
+	// session mw
+	smh, sstore := session.NewWithStore()
+
+	// csrf mw
+	cmh := New(Config{
+		Session: sstore,
+	})
+
+	app.Use(smh)
+
+	app.Use(cmh)
+
+	app.Get("/", func(c fiber.Ctx) error {
+		sess := session.FromContext(c)
+		sess.Set("hello", "world")
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	app.Post("/", func(c fiber.Ctx) error {
+		sess := session.FromContext(c)
+		if sess.Get("hello") != "world" {
+			return c.SendStatus(fiber.StatusInternalServerError)
+		}
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	h := app.Handler()
+	ctx := &fasthttp.RequestCtx{}
+
+	// Generate CSRF token and session_id
+	ctx.Request.Header.SetMethod(fiber.MethodGet)
+	h(ctx)
+	csrfTokenParts := strings.Split(string(ctx.Response.Header.Peek(fiber.HeaderSetCookie)), ";")
+	require.Greater(t, len(csrfTokenParts), 2)
+	csrfToken := strings.Split(csrfTokenParts[0], "=")[1]
+	require.NotEmpty(t, csrfToken)
+	sessionID := strings.Split(csrfTokenParts[1], "=")[1]
+	require.NotEmpty(t, sessionID)
+
+	// Use the CSRF token and session_id
+	ctx.Request.Reset()
+	ctx.Response.Reset()
+	ctx.Request.Header.SetMethod(fiber.MethodPost)
+	ctx.Request.Header.Set(HeaderName, csrfToken)
+	ctx.Request.Header.SetCookie(ConfigDefault.CookieName, csrfToken)
+	ctx.Request.Header.SetCookie("session_id", sessionID)
+	h(ctx)
+	require.Equal(t, 200, ctx.Response.StatusCode())
+}
+
 // go test -run Test_CSRF_ExpiredToken
 func Test_CSRF_ExpiredToken(t *testing.T) {
 	t.Parallel()
 	app := fiber.New()
 
 	app.Use(New(Config{
-		Expiration: 1 * time.Second,
+		IdleTimeout: 1 * time.Second,
 	}))
 
 	app.Post("/", func(c fiber.Ctx) error {
@@ -205,7 +260,7 @@ func Test_CSRF_ExpiredToken_WithSession(t *testing.T) {
 	t.Parallel()
 
 	// session store
-	store := session.New(session.Config{
+	store := session.NewStore(session.Config{
 		KeyLookup: "cookie:_session",
 	})
 
@@ -229,8 +284,8 @@ func Test_CSRF_ExpiredToken_WithSession(t *testing.T) {
 
 	// middleware config
 	config := Config{
-		Session:    store,
-		Expiration: 1 * time.Second,
+		Session:     store,
+		IdleTimeout: 1 * time.Second,
 	}
 
 	// middleware
@@ -1076,7 +1131,7 @@ func Test_CSRF_DeleteToken_WithSession(t *testing.T) {
 	t.Parallel()
 
 	// session store
-	store := session.New(session.Config{
+	store := session.NewStore(session.Config{
 		KeyLookup: "cookie:_session",
 	})
 
@@ -1276,56 +1331,65 @@ func Test_CSRF_Cookie_Injection_Exploit(t *testing.T) {
 }
 
 // TODO: use this test case and make the unsafe header value bug from https://github.com/gofiber/fiber/issues/2045 reproducible and permanently fixed/tested by this testcase
-// func Test_CSRF_UnsafeHeaderValue(t *testing.T) {
-//  t.Parallel()
-// 	app := fiber.New()
+func Test_CSRF_UnsafeHeaderValue(t *testing.T) {
+	t.SkipNow()
+	t.Parallel()
+	app := fiber.New()
 
-// 	app.Use(New())
-// 	app.Get("/", func(c fiber.Ctx) error {
-// 		return c.SendStatus(fiber.StatusOK)
-// 	})
-// 	app.Get("/test", func(c fiber.Ctx) error {
-// 		return c.SendStatus(fiber.StatusOK)
-// 	})
-// 	app.Post("/", func(c fiber.Ctx) error {
-// 		return c.SendStatus(fiber.StatusOK)
-// 	})
+	app.Use(New())
+	app.Get("/", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	app.Get("/test", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+	app.Post("/", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
 
-// 	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil))
-// 	require.NoError(t, err)
-// 	require.Equal(t, fiber.StatusOK, resp.StatusCode)
+	resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/", nil))
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
 
-// 	var token string
-// 	for _, c := range resp.Cookies() {
-// 		if c.Name != ConfigDefault.CookieName {
-// 			continue
-// 		}
-// 		token = c.Value
-// 		break
-// 	}
+	var token string
+	for _, c := range resp.Cookies() {
+		if c.Name != ConfigDefault.CookieName {
+			continue
+		}
+		token = c.Value
+		break
+	}
 
-// 	fmt.Println("token", token)
+	t.Log("token", token)
 
-// 	getReq := httptest.NewRequest(fiber.MethodGet, "/", nil)
-// 	getReq.Header.Set(HeaderName, token)
-// 	resp, err = app.Test(getReq)
+	getReq := httptest.NewRequest(fiber.MethodGet, "/", nil)
+	getReq.Header.Set(HeaderName, token)
+	resp, err = app.Test(getReq)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
 
-// 	getReq = httptest.NewRequest(fiber.MethodGet, "/test", nil)
-// 	getReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-// 	getReq.Header.Set(fiber.HeaderCacheControl, "no")
-// 	getReq.Header.Set(HeaderName, token)
+	getReq = httptest.NewRequest(fiber.MethodGet, "/test", nil)
+	getReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	getReq.Header.Set(fiber.HeaderCacheControl, "no")
+	getReq.Header.Set(HeaderName, token)
 
-// 	resp, err = app.Test(getReq)
+	resp, err = app.Test(getReq)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
 
-// 	getReq.Header.Set(fiber.HeaderAccept, "*/*")
-// 	getReq.Header.Del(HeaderName)
-// 	resp, err = app.Test(getReq)
+	getReq.Header.Set(fiber.HeaderAccept, "*/*")
+	getReq.Header.Del(HeaderName)
+	resp, err = app.Test(getReq)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
 
-// 	postReq := httptest.NewRequest(fiber.MethodPost, "/", nil)
-// 	postReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-// 	postReq.Header.Set(HeaderName, token)
-// 	resp, err = app.Test(postReq)
-// }
+	postReq := httptest.NewRequest(fiber.MethodPost, "/", nil)
+	postReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	postReq.Header.Set(HeaderName, token)
+	resp, err = app.Test(postReq)
+	require.NoError(t, err)
+	require.Equal(t, fiber.StatusOK, resp.StatusCode)
+}
 
 // go test -v -run=^$ -bench=Benchmark_Middleware_CSRF_Check -benchmem -count=4
 func Benchmark_Middleware_CSRF_Check(b *testing.B) {

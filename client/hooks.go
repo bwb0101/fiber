@@ -1,28 +1,26 @@
 package client
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"mime/multipart"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gofiber/utils/v2"
 	"github.com/valyala/fasthttp"
 )
 
-var (
-	protocolCheck = regexp.MustCompile(`^https?://.*$`)
+var protocolCheck = regexp.MustCompile(`^https?://.*$`)
 
-	headerAccept = "Accept"
-
+const (
+	headerAccept      = "Accept"
 	applicationJSON   = "application/json"
+	applicationCBOR   = "application/cbor"
 	applicationXML    = "application/xml"
 	applicationForm   = "application/x-www-form-urlencoded"
 	multipartFormData = "multipart/form-data"
@@ -30,42 +28,40 @@ var (
 	letterBytes   = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	letterIdxBits = 6                    // 6 bits to represent a letter index
 	letterIdxMask = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
-	letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
+	letterIdxMax  = 64 / letterIdxBits   // # of letter indices fitting into 64 bits
 )
 
-// randString returns a random string with n length
-func randString(n int) string {
+// unsafeRandString returns a random string of length n.
+func unsafeRandString(n int) string {
 	b := make([]byte, n)
-	length := len(letterBytes)
-	src := rand.NewSource(time.Now().UnixNano())
+	const length = uint64(len(letterBytes))
 
-	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
+	//nolint:gosec // Not a concern
+	for i, cache, remain := n-1, rand.Uint64(), letterIdxMax; i >= 0; {
 		if remain == 0 {
-			cache, remain = src.Int63(), letterIdxMax
+			//nolint:gosec // Not a concern
+			cache, remain = rand.Uint64(), letterIdxMax
 		}
 
-		if idx := int(cache & int64(letterIdxMask)); idx < length {
+		if idx := cache & letterIdxMask; idx < length {
 			b[i] = letterBytes[idx]
 			i--
 		}
-		cache >>= int64(letterIdxBits)
+		cache >>= letterIdxBits
 		remain--
 	}
 
 	return utils.UnsafeString(b)
 }
 
-// parserRequestURL will set the options for the hostclient
-// and normalize the url.
-// The baseUrl will be merge with request uri.
-// Query params and path params deal in this function.
+// parserRequestURL sets options for the hostclient and normalizes the URL.
+// It merges the baseURL with the request URI if needed and applies query and path parameters.
 func parserRequestURL(c *Client, req *Request) error {
 	splitURL := strings.Split(req.url, "?")
-	// I don't want to judge splitURL length.
+	// Ensure splitURL has at least two elements.
 	splitURL = append(splitURL, "")
 
-	// Determine whether to superimpose baseurl based on
-	// whether the URL starts with the protocol
+	// If the URL doesn't start with http/https, prepend the baseURL.
 	uri := splitURL[0]
 	if !protocolCheck.MatchString(uri) {
 		uri = c.baseURL + uri
@@ -74,7 +70,7 @@ func parserRequestURL(c *Client, req *Request) error {
 		}
 	}
 
-	// set path params
+	// Set path parameters from the request and client.
 	req.path.VisitAll(func(key, val string) {
 		uri = strings.ReplaceAll(uri, ":"+key, val)
 	})
@@ -82,66 +78,69 @@ func parserRequestURL(c *Client, req *Request) error {
 		uri = strings.ReplaceAll(uri, ":"+key, val)
 	})
 
-	// set uri to request and other related setting
+	// Set the URI in the raw request.
 	req.RawRequest.SetRequestURI(uri)
 
-	// merge query params
+	// Merge query parameters.
 	hashSplit := strings.Split(splitURL[1], "#")
 	hashSplit = append(hashSplit, "")
 	args := fasthttp.AcquireArgs()
-	defer func() {
-		fasthttp.ReleaseArgs(args)
-	}()
+	defer fasthttp.ReleaseArgs(args)
 
 	args.Parse(hashSplit[0])
+
 	c.params.VisitAll(func(key, value []byte) {
 		args.AddBytesKV(key, value)
 	})
 	req.params.VisitAll(func(key, value []byte) {
 		args.AddBytesKV(key, value)
 	})
+
 	req.RawRequest.URI().SetQueryStringBytes(utils.CopyBytes(args.QueryString()))
 	req.RawRequest.URI().SetHash(hashSplit[1])
 
 	return nil
 }
 
-// parserRequestHeader will make request header up.
-// It will merge headers from client and request.
-// Header should be set automatically based on data.
-// User-Agent should be set.
+// parserRequestHeader merges client and request headers, and sets headers automatically based on the request data.
+// It also sets the User-Agent and Referer headers, and applies any cookies from the cookie jar.
 func parserRequestHeader(c *Client, req *Request) error {
-	// set method
+	// Set HTTP method.
 	req.RawRequest.Header.SetMethod(req.Method())
-	// merge header
+
+	// Merge headers from the client.
 	c.header.VisitAll(func(key, value []byte) {
 		req.RawRequest.Header.AddBytesKV(key, value)
 	})
 
+	// Merge headers from the request.
 	req.header.VisitAll(func(key, value []byte) {
 		req.RawRequest.Header.AddBytesKV(key, value)
 	})
 
-	// according to data set content-type
+	// Set Content-Type and Accept headers based on the request body type.
 	switch req.bodyType {
 	case jsonBody:
 		req.RawRequest.Header.SetContentType(applicationJSON)
 		req.RawRequest.Header.Set(headerAccept, applicationJSON)
 	case xmlBody:
 		req.RawRequest.Header.SetContentType(applicationXML)
+	case cborBody:
+		req.RawRequest.Header.SetContentType(applicationCBOR)
 	case formBody:
 		req.RawRequest.Header.SetContentType(applicationForm)
 	case filesBody:
 		req.RawRequest.Header.SetContentType(multipartFormData)
-		// set boundary
+		// If boundary is default, append a random string to it.
 		if req.boundary == boundary {
-			req.boundary += randString(16)
+			req.boundary += unsafeRandString(16)
 		}
 		req.RawRequest.Header.SetMultipartFormBoundary(req.boundary)
 	default:
+		// noBody or rawBody do not require special handling here.
 	}
 
-	// set useragent
+	// Set User-Agent header.
 	req.RawRequest.Header.SetUserAgent(defaultUserAgent)
 	if c.userAgent != "" {
 		req.RawRequest.Header.SetUserAgent(c.userAgent)
@@ -150,22 +149,23 @@ func parserRequestHeader(c *Client, req *Request) error {
 		req.RawRequest.Header.SetUserAgent(req.userAgent)
 	}
 
-	// set referer
+	// Set Referer header.
 	req.RawRequest.Header.SetReferer(c.referer)
 	if req.referer != "" {
 		req.RawRequest.Header.SetReferer(req.referer)
 	}
 
-	// set cookie
-	// add cookie form jar to req
+	// Set cookies from the cookie jar if available.
 	if c.cookieJar != nil {
 		c.cookieJar.dumpCookiesToReq(req.RawRequest)
 	}
 
+	// Set cookies from the client.
 	c.cookies.VisitAll(func(key, val string) {
 		req.RawRequest.Header.SetCookie(key, val)
 	})
 
+	// Set cookies from the request.
 	req.cookies.VisitAll(func(key, val string) {
 		req.RawRequest.Header.SetCookie(key, val)
 	})
@@ -173,8 +173,7 @@ func parserRequestHeader(c *Client, req *Request) error {
 	return nil
 }
 
-// parserRequestBody automatically serializes the data according to
-// the data type and stores it in the body of the rawRequest
+// parserRequestBody serializes the request body based on its type and sets it into the RawRequest.
 func parserRequestBody(c *Client, req *Request) error {
 	switch req.bodyType {
 	case jsonBody:
@@ -189,25 +188,31 @@ func parserRequestBody(c *Client, req *Request) error {
 			return err
 		}
 		req.RawRequest.SetBody(body)
+	case cborBody:
+		body, err := c.cborMarshal(req.body)
+		if err != nil {
+			return err
+		}
+		req.RawRequest.SetBody(body)
 	case formBody:
 		req.RawRequest.SetBody(req.formData.QueryString())
 	case filesBody:
 		return parserRequestBodyFile(req)
 	case rawBody:
-		if body, ok := req.body.([]byte); ok {
+		if body, ok := req.body.([]byte); ok { //nolint:revive // ignore simplicity
 			req.RawRequest.SetBody(body)
 		} else {
 			return ErrBodyType
 		}
 	case noBody:
+		// No body to set.
 		return nil
 	}
 
 	return nil
 }
 
-// parserRequestBodyFile parses request body if body type is file
-// this is an addition of parserRequestBody.
+// parserRequestBodyFile handles the case where the request contains files to be uploaded.
 func parserRequestBodyFile(req *Request) error {
 	mw := multipart.NewWriter(req.RawRequest.BodyWriter())
 	err := mw.SetBoundary(req.boundary)
@@ -215,13 +220,14 @@ func parserRequestBodyFile(req *Request) error {
 		return fmt.Errorf("set boundary error: %w", err)
 	}
 	defer func() {
-		err := mw.Close()
-		if err != nil {
+		e := mw.Close()
+		if e != nil {
+			// Close errors are typically ignored.
 			return
 		}
 	}()
 
-	// add formdata
+	// Add form data.
 	req.formData.VisitAll(func(key, value []byte) {
 		if err != nil {
 			return
@@ -232,25 +238,25 @@ func parserRequestBodyFile(req *Request) error {
 		return fmt.Errorf("write formdata error: %w", err)
 	}
 
-	// add file
-	b := make([]byte, 512)
+	// Add files.
+	fileBuf := make([]byte, 1<<20) // 1MB buffer
 	for i, v := range req.files {
 		if v.name == "" && v.path == "" {
 			return ErrFileNoName
 		}
 
-		// if name is not exist, set name
+		// Set the file name if not provided.
 		if v.name == "" && v.path != "" {
 			v.path = filepath.Clean(v.path)
 			v.name = filepath.Base(v.path)
 		}
 
-		// if field name is not exist, set it
+		// Set the field name if not provided.
 		if v.fieldName == "" {
 			v.fieldName = "file" + strconv.Itoa(i+1)
 		}
 
-		// check the reader
+		// If reader is not set, open the file.
 		if v.reader == nil {
 			v.reader, err = os.Open(v.path)
 			if err != nil {
@@ -258,30 +264,17 @@ func parserRequestBodyFile(req *Request) error {
 			}
 		}
 
-		// write file
+		// Create form file and copy the content.
 		w, err := mw.CreateFormFile(v.fieldName, v.name)
 		if err != nil {
 			return fmt.Errorf("create file error: %w", err)
 		}
 
-		for {
-			n, err := v.reader.Read(b)
-			if err != nil && !errors.Is(err, io.EOF) {
-				return fmt.Errorf("read file error: %w", err)
-			}
-
-			if errors.Is(err, io.EOF) {
-				break
-			}
-
-			_, err = w.Write(b[:n])
-			if err != nil {
-				return fmt.Errorf("write file error: %w", err)
-			}
+		if _, err := io.CopyBuffer(w, v.reader, fileBuf); err != nil {
+			return fmt.Errorf("failed to copy file data: %w", err)
 		}
 
-		err = v.reader.Close()
-		if err != nil {
+		if err := v.reader.Close(); err != nil {
 			return fmt.Errorf("close file error: %w", err)
 		}
 	}
@@ -289,7 +282,7 @@ func parserRequestBodyFile(req *Request) error {
 	return nil
 }
 
-// parserResponseCookie will parse the response header and store it in the response
+// parserResponseCookie parses the Set-Cookie headers from the response and stores them.
 func parserResponseCookie(c *Client, resp *Response, req *Request) error {
 	var err error
 	resp.RawResponse.Header.VisitAllCookie(func(key, value []byte) {
@@ -299,7 +292,6 @@ func parserResponseCookie(c *Client, resp *Response, req *Request) error {
 			return
 		}
 		cookie.SetKeyBytes(key)
-
 		resp.cookie = append(resp.cookie, cookie)
 	})
 
@@ -307,7 +299,7 @@ func parserResponseCookie(c *Client, resp *Response, req *Request) error {
 		return err
 	}
 
-	// store cookies to jar
+	// Store cookies in the cookie jar if available.
 	if c.cookieJar != nil {
 		c.cookieJar.parseCookiesFromResp(req.RawRequest.URI().Host(), req.RawRequest.URI().Path(), resp.RawResponse)
 	}
@@ -315,7 +307,7 @@ func parserResponseCookie(c *Client, resp *Response, req *Request) error {
 	return nil
 }
 
-// logger is a response hook that logs the request and response
+// logger is a response hook that logs request and response data if debug mode is enabled.
 func logger(c *Client, resp *Response, req *Request) error {
 	if !c.debug {
 		return nil

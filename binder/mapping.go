@@ -1,13 +1,17 @@
 package binder
 
 import (
+	"errors"
+	"fmt"
+	"mime/multipart"
 	"reflect"
 	"strings"
 	"sync"
 
-	"github.com/gofiber/fiber/v3/internal/schema"
 	"github.com/gofiber/utils/v2"
 	"github.com/valyala/bytebufferpool"
+
+	"github.com/gofiber/schema"
 )
 
 // ParserConfig form decoder config for SetParserDecoder
@@ -21,7 +25,7 @@ type ParserConfig struct {
 // ParserType require two element, type and converter for register.
 // Use ParserType with BodyParser for parsing custom type in form data.
 type ParserType struct {
-	Customtype any
+	CustomType any
 	Converter  func(string) reflect.Value
 }
 
@@ -29,7 +33,7 @@ var (
 	// decoderPoolMap helps to improve binders
 	decoderPoolMap = map[string]*sync.Pool{}
 	// tags is used to classify parser's pool
-	tags = []string{HeaderBinder.Name(), RespHeaderBinder.Name(), CookieBinder.Name(), QueryBinder.Name(), FormBinder.Name(), URIBinder.Name()}
+	tags = []string{"header", "respHeader", "cookie", "query", "form", "uri"}
 )
 
 // SetParserDecoder allow globally change the option of form decoder, update decoderPool
@@ -48,7 +52,7 @@ func decoderBuilder(parserConfig ParserConfig) any {
 		decoder.SetAliasTag(parserConfig.SetAliasTag)
 	}
 	for _, v := range parserConfig.ParserType {
-		decoder.RegisterConverter(reflect.ValueOf(v.Customtype).Interface(), v.Converter)
+		decoder.RegisterConverter(reflect.ValueOf(v.CustomType).Interface(), v.Converter)
 	}
 	decoder.ZeroEmpty(parserConfig.ZeroEmpty)
 	return decoder
@@ -66,7 +70,7 @@ func init() {
 }
 
 // parse data into the map or struct
-func parse(aliasTag string, out any, data map[string][]string) error {
+func parse(aliasTag string, out any, data map[string][]string, files ...map[string][]*multipart.FileHeader) error {
 	ptrVal := reflect.ValueOf(out)
 
 	// Get pointer value
@@ -80,11 +84,11 @@ func parse(aliasTag string, out any, data map[string][]string) error {
 	}
 
 	// Parse into the struct
-	return parseToStruct(aliasTag, out, data)
+	return parseToStruct(aliasTag, out, data, files...)
 }
 
-// Parse data into the struct with gorilla/schema
-func parseToStruct(aliasTag string, out any, data map[string][]string) error {
+// Parse data into the struct with gofiber/schema
+func parseToStruct(aliasTag string, out any, data map[string][]string, files ...map[string][]*multipart.FileHeader) error {
 	// Get decoder from pool
 	schemaDecoder := decoderPoolMap[aliasTag].Get().(*schema.Decoder) //nolint:errcheck,forcetypeassert // not needed
 	defer decoderPoolMap[aliasTag].Put(schemaDecoder)
@@ -92,7 +96,11 @@ func parseToStruct(aliasTag string, out any, data map[string][]string) error {
 	// Set alias tag
 	schemaDecoder.SetAliasTag(aliasTag)
 
-	return schemaDecoder.Decode(out, data)
+	if err := schemaDecoder.Decode(out, data, files...); err != nil {
+		return fmt.Errorf("bind: %w", err)
+	}
+
+	return nil
 }
 
 // Parse data into the map
@@ -100,8 +108,8 @@ func parseToStruct(aliasTag string, out any, data map[string][]string) error {
 func parseToMap(ptr any, data map[string][]string) error {
 	elem := reflect.TypeOf(ptr).Elem()
 
-	// map[string][]string
-	if elem.Kind() == reflect.Slice {
+	switch elem.Kind() {
+	case reflect.Slice:
 		newMap, ok := ptr.(map[string][]string)
 		if !ok {
 			return ErrMapNotConvertable
@@ -110,18 +118,21 @@ func parseToMap(ptr any, data map[string][]string) error {
 		for k, v := range data {
 			newMap[k] = v
 		}
+	case reflect.String, reflect.Interface:
+		newMap, ok := ptr.(map[string]string)
+		if !ok {
+			return ErrMapNotConvertable
+		}
 
-		return nil
-	}
-
-	// map[string]string
-	newMap, ok := ptr.(map[string]string)
-	if !ok {
-		return ErrMapNotConvertable
-	}
-
-	for k, v := range data {
-		newMap[k] = v[len(v)-1]
+		for k, v := range data {
+			if len(v) == 0 {
+				newMap[k] = ""
+				continue
+			}
+			newMap[k] = v[len(v)-1]
+		}
+	default:
+		return nil // it's not necessary to check all types
 	}
 
 	return nil
@@ -132,21 +143,34 @@ func parseParamSquareBrackets(k string) (string, error) {
 	defer bytebufferpool.Put(bb)
 
 	kbytes := []byte(k)
+	openBracketsCount := 0
 
 	for i, b := range kbytes {
-		if b == '[' && kbytes[i+1] != ']' {
-			if err := bb.WriteByte('.'); err != nil {
-				return "", err //nolint:wrapcheck // unnecessary to wrap it
+		if b == '[' {
+			openBracketsCount++
+			if i+1 < len(kbytes) && kbytes[i+1] != ']' {
+				if err := bb.WriteByte('.'); err != nil {
+					return "", err //nolint:wrapcheck // unnecessary to wrap it
+				}
 			}
+			continue
 		}
 
-		if b == '[' || b == ']' {
+		if b == ']' {
+			openBracketsCount--
+			if openBracketsCount < 0 {
+				return "", errors.New("unmatched brackets")
+			}
 			continue
 		}
 
 		if err := bb.WriteByte(b); err != nil {
 			return "", err //nolint:wrapcheck // unnecessary to wrap it
 		}
+	}
+
+	if openBracketsCount > 0 {
+		return "", errors.New("unmatched brackets")
 	}
 
 	return bb.String(), nil
@@ -203,7 +227,7 @@ func equalFieldType(out any, kind reflect.Kind, key string) bool {
 			continue
 		}
 		// Get tag from field if exist
-		inputFieldName := typeField.Tag.Get(QueryBinder.Name())
+		inputFieldName := typeField.Tag.Get("query") // Name of query binder
 		if inputFieldName == "" {
 			inputFieldName = typeField.Name
 		} else {
@@ -225,4 +249,56 @@ func FilterFlags(content string) string {
 		}
 	}
 	return content
+}
+
+func formatBindData[T, K any](out any, data map[string][]T, key string, value K, enableSplitting, supportBracketNotation bool) error { //nolint:revive // it's okay
+	var err error
+	if supportBracketNotation && strings.Contains(key, "[") {
+		key, err = parseParamSquareBrackets(key)
+		if err != nil {
+			return err
+		}
+	}
+
+	switch v := any(value).(type) {
+	case string:
+		dataMap, ok := any(data).(map[string][]string)
+		if !ok {
+			return fmt.Errorf("unsupported value type: %T", value)
+		}
+
+		assignBindData(out, dataMap, key, v, enableSplitting)
+	case []string:
+		dataMap, ok := any(data).(map[string][]string)
+		if !ok {
+			return fmt.Errorf("unsupported value type: %T", value)
+		}
+
+		for _, val := range v {
+			assignBindData(out, dataMap, key, val, enableSplitting)
+		}
+	case []*multipart.FileHeader:
+		for _, val := range v {
+			valT, ok := any(val).(T)
+			if !ok {
+				return fmt.Errorf("unsupported value type: %T", value)
+			}
+			data[key] = append(data[key], valT)
+		}
+	default:
+		return fmt.Errorf("unsupported value type: %T", value)
+	}
+
+	return err
+}
+
+func assignBindData(out any, data map[string][]string, key, value string, enableSplitting bool) { //nolint:revive // it's okay
+	if enableSplitting && strings.Contains(value, ",") && equalFieldType(out, reflect.Slice, key) {
+		values := strings.Split(value, ",")
+		for i := 0; i < len(values); i++ {
+			data[key] = append(data[key], values[i])
+		}
+	} else {
+		data[key] = append(data[key], value)
+	}
 }

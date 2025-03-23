@@ -11,6 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var testConfig = fiber.TestConfig{
+	Timeout:       5 * time.Second,
+	FailOnTimeout: true,
+}
+
 func Test_Non_Pprof_Path(t *testing.T) {
 	app := fiber.New()
 
@@ -100,13 +105,12 @@ func Test_Pprof_Subs(t *testing.T) {
 	}
 
 	for _, sub := range subs {
-		sub := sub
 		t.Run(sub, func(t *testing.T) {
 			target := "/debug/pprof/" + sub
 			if sub == "profile" {
 				target += "?seconds=1"
 			}
-			resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, target, nil), 5*time.Second)
+			resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, target, nil), testConfig)
 			require.NoError(t, err)
 			require.Equal(t, 200, resp.StatusCode)
 		})
@@ -128,13 +132,12 @@ func Test_Pprof_Subs_WithPrefix(t *testing.T) {
 	}
 
 	for _, sub := range subs {
-		sub := sub
 		t.Run(sub, func(t *testing.T) {
 			target := "/federated-fiber/debug/pprof/" + sub
 			if sub == "profile" {
 				target += "?seconds=1"
 			}
-			resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, target, nil), 5*time.Second)
+			resp, err := app.Test(httptest.NewRequest(fiber.MethodGet, target, nil), testConfig)
 			require.NoError(t, err)
 			require.Equal(t, 200, resp.StatusCode)
 		})

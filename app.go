@@ -14,23 +14,25 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/gofiber/fiber/v3/log"
 	"github.com/gofiber/utils/v2"
-
 	"github.com/valyala/fasthttp"
 )
 
 // Version of current fiber package
-const Version = "3.0.0-beta.3"
+const Version = "3.0.0-beta.4"
 
 // Handler defines a function to serve HTTP requests.
 type Handler = func(Ctx) error
@@ -142,7 +144,7 @@ type Config struct { //nolint:govet // Aligning the struct fields is not necessa
 	// Default: false
 	StrictRouting bool `json:"strict_routing"`
 
-	// When set to true, enables case sensitive routing.
+	// When set to true, enables case-sensitive routing.
 	// E.g. "/FoO" and "/foo" are treated as different routes.
 	// By default this is disabled and both "/FoO" and "/foo" will execute the same handler.
 	//
@@ -318,6 +320,20 @@ type Config struct { //nolint:govet // Aligning the struct fields is not necessa
 	// Default: json.Unmarshal
 	JSONDecoder utils.JSONUnmarshal `json:"-"`
 
+	// When set by an external client of Fiber it will use the provided implementation of a
+	// CBORMarshal
+	//
+	// Allowing for flexibility in using another cbor library for encoding
+	// Default: cbor.Marshal
+	CBOREncoder utils.CBORMarshal `json:"-"`
+
+	// When set by an external client of Fiber it will use the provided implementation of a
+	// CBORUnmarshal
+	//
+	// Allowing for flexibility in using another cbor library for decoding
+	// Default: cbor.Unmarshal
+	CBORDecoder utils.CBORUnmarshal `json:"-"`
+
 	// XMLEncoder set by an external client of Fiber it will use the provided implementation of a
 	// XMLMarshal
 	//
@@ -325,34 +341,43 @@ type Config struct { //nolint:govet // Aligning the struct fields is not necessa
 	// Default: xml.Marshal
 	XMLEncoder utils.XMLMarshal `json:"-"`
 
+	// XMLDecoder set by an external client of Fiber it will use the provided implementation of a
+	// XMLUnmarshal
+	//
+	// Allowing for flexibility in using another XML library for decoding
+	// Default: xml.Unmarshal
+	XMLDecoder utils.XMLUnmarshal `json:"-"`
+
 	// If you find yourself behind some sort of proxy, like a load balancer,
 	// then certain header information may be sent to you using special X-Forwarded-* headers or the Forwarded header.
 	// For example, the Host HTTP header is usually used to return the requested host.
 	// But when you’re behind a proxy, the actual host may be stored in an X-Forwarded-Host header.
 	//
-	// If you are behind a proxy, you should enable TrustedProxyCheck to prevent header spoofing.
-	// If you enable EnableTrustedProxyCheck and leave TrustedProxies empty Fiber will skip
+	// If you are behind a proxy, you should enable TrustProxy to prevent header spoofing.
+	// If you enable TrustProxy and do not provide a TrustProxyConfig, Fiber will skip
 	// all headers that could be spoofed.
-	// If request ip in TrustedProxies whitelist then:
+	// If the request IP is in the TrustProxyConfig.Proxies allowlist, then:
 	//   1. c.Scheme() get value from X-Forwarded-Proto, X-Forwarded-Protocol, X-Forwarded-Ssl or X-Url-Scheme header
 	//   2. c.IP() get value from ProxyHeader header.
 	//   3. c.Host() and c.Hostname() get value from X-Forwarded-Host header
-	// But if request ip NOT in Trusted Proxies whitelist then:
-	//   1. c.Scheme() WON't get value from X-Forwarded-Proto, X-Forwarded-Protocol, X-Forwarded-Ssl or X-Url-Scheme header,
-	//    will return https in case when tls connection is handled by the app, of http otherwise
+	// But if the request IP is NOT in the TrustProxyConfig.Proxies allowlist, then:
+	//   1. c.Scheme() WON'T get value from X-Forwarded-Proto, X-Forwarded-Protocol, X-Forwarded-Ssl or X-Url-Scheme header,
+	//    will return https when a TLS connection is handled by the app, or http otherwise.
 	//   2. c.IP() WON'T get value from ProxyHeader header, will return RemoteIP() from fasthttp context
 	//   3. c.Host() and c.Hostname() WON'T get value from X-Forwarded-Host header, fasthttp.Request.URI().Host()
 	//    will be used to get the hostname.
 	//
-	// Default: false
-	EnableTrustedProxyCheck bool `json:"enable_trusted_proxy_check"`
-
-	// Read EnableTrustedProxyCheck doc.
+	// To automatically trust all loopback, link-local, or private IP addresses,
+	// without manually adding them to the TrustProxyConfig.Proxies allowlist,
+	// you can set TrustProxyConfig.Loopback, TrustProxyConfig.LinkLocal, or TrustProxyConfig.Private to true.
 	//
-	// Default: []string
-	TrustedProxies     []string `json:"trusted_proxies"`
-	trustedProxiesMap  map[string]struct{}
-	trustedProxyRanges []*net.IPNet
+	// Default: false
+	TrustProxy bool `json:"trust_proxy"`
+
+	// Read TrustProxy doc.
+	//
+	// Default: DefaultTrustProxyConfig
+	TrustProxyConfig TrustProxyConfig `json:"trust_proxy_config"`
 
 	// If set to true, c.IP() and c.IPs() will validate IP addresses before returning them.
 	// Also, c.IP() will return only the first valid IP rather than just the raw header
@@ -372,7 +397,7 @@ type Config struct { //nolint:govet // Aligning the struct fields is not necessa
 	// Default: nil
 	StructValidator StructValidator
 
-	// RequestMethods provides customizibility for HTTP methods. You can add/remove methods as you wish.
+	// RequestMethods provides customizability for HTTP methods. You can add/remove methods as you wish.
 	//
 	// Optional. Default: DefaultMethods
 	RequestMethods []string
@@ -383,6 +408,36 @@ type Config struct { //nolint:govet // Aligning the struct fields is not necessa
 	//
 	// Optional. Default: false
 	EnableSplittingOnParsers bool `json:"enable_splitting_on_parsers"`
+}
+
+// Default TrustProxyConfig
+var DefaultTrustProxyConfig = TrustProxyConfig{}
+
+// TrustProxyConfig is a struct for configuring trusted proxies if Config.TrustProxy is true.
+type TrustProxyConfig struct {
+	ips map[string]struct{}
+
+	// Proxies is a list of trusted proxy IP addresses or CIDR ranges.
+	//
+	// Default: []string
+	Proxies []string `json:"proxies"`
+
+	ranges []*net.IPNet
+
+	// LinkLocal enables trusting all link-local IP ranges (e.g., 169.254.0.0/16, fe80::/10).
+	//
+	// Default: false
+	LinkLocal bool `json:"link_local"`
+
+	// Loopback enables trusting all loopback IP ranges (e.g., 127.0.0.0/8, ::1/128).
+	//
+	// Default: false
+	Loopback bool `json:"loopback"`
+
+	// Private enables trusting all private IP ranges (e.g., 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7).
+	//
+	// Default: false
+	Private bool `json:"private"`
 }
 
 // RouteMessage is some message need to be print when server starts
@@ -503,15 +558,24 @@ func New(config ...Config) *App {
 	if app.config.JSONDecoder == nil {
 		app.config.JSONDecoder = json.Unmarshal
 	}
+	if app.config.CBOREncoder == nil {
+		app.config.CBOREncoder = cbor.Marshal
+	}
+	if app.config.CBORDecoder == nil {
+		app.config.CBORDecoder = cbor.Unmarshal
+	}
 	if app.config.XMLEncoder == nil {
 		app.config.XMLEncoder = xml.Marshal
+	}
+	if app.config.XMLDecoder == nil {
+		app.config.XMLDecoder = xml.Unmarshal
 	}
 	if len(app.config.RequestMethods) == 0 {
 		app.config.RequestMethods = DefaultMethods
 	}
 
-	app.config.trustedProxiesMap = make(map[string]struct{}, len(app.config.TrustedProxies))
-	for _, ipAddress := range app.config.TrustedProxies {
+	app.config.TrustProxyConfig.ips = make(map[string]struct{}, len(app.config.TrustProxyConfig.Proxies))
+	for _, ipAddress := range app.config.TrustProxyConfig.Proxies {
 		app.handleTrustedProxy(ipAddress)
 	}
 
@@ -529,17 +593,22 @@ func New(config ...Config) *App {
 	return app
 }
 
-// Adds an ip address to trustedProxyRanges or trustedProxiesMap based on whether it is an IP range or not
+// Adds an ip address to TrustProxyConfig.ranges or TrustProxyConfig.ips based on whether it is an IP range or not
 func (app *App) handleTrustedProxy(ipAddress string) {
 	if strings.Contains(ipAddress, "/") {
 		_, ipNet, err := net.ParseCIDR(ipAddress)
 		if err != nil {
 			log.Warnf("IP range %q could not be parsed: %v", ipAddress, err)
 		} else {
-			app.config.trustedProxyRanges = append(app.config.trustedProxyRanges, ipNet)
+			app.config.TrustProxyConfig.ranges = append(app.config.TrustProxyConfig.ranges, ipNet)
 		}
 	} else {
-		app.config.trustedProxiesMap[ipAddress] = struct{}{}
+		ip := net.ParseIP(ipAddress)
+		if ip == nil {
+			log.Warnf("IP address %q could not be parsed", ipAddress)
+		} else {
+			app.config.TrustProxyConfig.ips[ipAddress] = struct{}{}
+		}
 	}
 }
 
@@ -547,6 +616,10 @@ func (app *App) handleTrustedProxy(ipAddress string) {
 // Note: It doesn't allow adding new methods, only customizing exist methods.
 func (app *App) NewCtxFunc(function func(app *App) CustomCtx) {
 	app.newCtxFunc = function
+
+	if app.server != nil {
+		app.server.Handler = app.customRequestHandler
+	}
 }
 
 // RegisterCustomConstraint allows to register custom constraint.
@@ -677,7 +750,7 @@ func (app *App) Use(args ...any) Router {
 			return app
 		}
 
-		app.register([]string{methodUse}, prefix, nil, nil, handlers...)
+		app.register([]string{methodUse}, prefix, nil, handlers...)
 	}
 
 	return app
@@ -685,67 +758,67 @@ func (app *App) Use(args ...any) Router {
 
 // Get registers a route for GET methods that requests a representation
 // of the specified resource. Requests using GET should only retrieve data.
-func (app *App) Get(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodGet}, path, handler, middleware...)
+func (app *App) Get(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodGet}, path, handler, handlers...)
 }
 
 // Head registers a route for HEAD methods that asks for a response identical
 // to that of a GET request, but without the response body.
-func (app *App) Head(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodHead}, path, handler, middleware...)
+func (app *App) Head(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodHead}, path, handler, handlers...)
 }
 
 // Post registers a route for POST methods that is used to submit an entity to the
 // specified resource, often causing a change in state or side effects on the server.
-func (app *App) Post(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodPost}, path, handler, middleware...)
+func (app *App) Post(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodPost}, path, handler, handlers...)
 }
 
 // Put registers a route for PUT methods that replaces all current representations
 // of the target resource with the request payload.
-func (app *App) Put(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodPut}, path, handler, middleware...)
+func (app *App) Put(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodPut}, path, handler, handlers...)
 }
 
 // Delete registers a route for DELETE methods that deletes the specified resource.
-func (app *App) Delete(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodDelete}, path, handler, middleware...)
+func (app *App) Delete(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodDelete}, path, handler, handlers...)
 }
 
 // Connect registers a route for CONNECT methods that establishes a tunnel to the
 // server identified by the target resource.
-func (app *App) Connect(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodConnect}, path, handler, middleware...)
+func (app *App) Connect(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodConnect}, path, handler, handlers...)
 }
 
 // Options registers a route for OPTIONS methods that is used to describe the
 // communication options for the target resource.
-func (app *App) Options(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodOptions}, path, handler, middleware...)
+func (app *App) Options(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodOptions}, path, handler, handlers...)
 }
 
 // Trace registers a route for TRACE methods that performs a message loop-back
 // test along the path to the target resource.
-func (app *App) Trace(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodTrace}, path, handler, middleware...)
+func (app *App) Trace(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodTrace}, path, handler, handlers...)
 }
 
 // Patch registers a route for PATCH methods that is used to apply partial
 // modifications to a resource.
-func (app *App) Patch(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add([]string{MethodPatch}, path, handler, middleware...)
+func (app *App) Patch(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add([]string{MethodPatch}, path, handler, handlers...)
 }
 
 // Add allows you to specify multiple HTTP methods to register a route.
-func (app *App) Add(methods []string, path string, handler Handler, middleware ...Handler) Router {
-	app.register(methods, path, nil, handler, middleware...)
+func (app *App) Add(methods []string, path string, handler Handler, handlers ...Handler) Router {
+	app.register(methods, path, nil, append([]Handler{handler}, handlers...)...)
 
 	return app
 }
 
 // All will register the handler on all HTTP methods
-func (app *App) All(path string, handler Handler, middleware ...Handler) Router {
-	return app.Add(app.config.RequestMethods, path, handler, middleware...)
+func (app *App) All(path string, handler Handler, handlers ...Handler) Router {
+	return app.Add(app.config.RequestMethods, path, handler, handlers...)
 }
 
 // Group is used for Routes with common prefix to define a new sub-router with optional middleware.
@@ -755,7 +828,7 @@ func (app *App) All(path string, handler Handler, middleware ...Handler) Router 
 func (app *App) Group(prefix string, handlers ...Handler) Router {
 	grp := &Group{Prefix: prefix, app: app}
 	if len(handlers) > 0 {
-		app.register([]string{methodUse}, prefix, grp, nil, handlers...)
+		app.register([]string{methodUse}, prefix, grp, handlers...)
 	}
 	if err := app.hooks.executeOnGroupHooks(*grp); err != nil {
 		panic(err)
@@ -799,7 +872,11 @@ func (app *App) Config() Config {
 func (app *App) Handler() fasthttp.RequestHandler { //revive:disable-line:confusing-naming // Having both a Handler() (uppercase) and a handler() (lowercase) is fine. TODO: Use nolint:revive directive instead. See https://github.com/golangci/golangci-lint/issues/3476
 	// prepare the server for the start
 	app.startupProcess()
-	return app.requestHandler
+
+	if app.newCtxFunc != nil {
+		return app.customRequestHandler
+	}
+	return app.defaultRequestHandler
 }
 
 // Stack returns the raw router stack.
@@ -816,6 +893,13 @@ func (app *App) HandlersCount() uint32 {
 // Shutdown works by first closing all open listeners and then waiting indefinitely for all connections to return to idle before shutting down.
 //
 // Make sure the program doesn't exit and waits instead for Shutdown to return.
+//
+// Important: app.Listen() must be called in a separate goroutine, otherwise shutdown hooks will not work
+// as Listen() is a blocking operation. Example:
+//
+//	go app.Listen(":3000")
+//	// ...
+//	app.Shutdown()
 //
 // Shutdown does not close keepalive connections so its recommended to set ReadTimeout to something else than 0.
 func (app *App) Shutdown() error {
@@ -841,17 +925,21 @@ func (app *App) ShutdownWithTimeout(timeout time.Duration) error {
 //
 // ShutdownWithContext does not close keepalive connections so its recommended to set ReadTimeout to something else than 0.
 func (app *App) ShutdownWithContext(ctx context.Context) error {
-	if app.hooks != nil {
-		// TODO: check should be defered?
-		app.hooks.executeOnShutdownHooks()
-	}
-
 	app.mutex.Lock()
 	defer app.mutex.Unlock()
+
+	var err error
+
 	if app.server == nil {
 		return ErrNotRunning
 	}
-	return app.server.ShutdownWithContext(ctx)
+
+	// Execute the Shutdown hook
+	app.hooks.executeOnPreShutdownHooks()
+	defer app.hooks.executeOnPostShutdownHooks(err)
+
+	err = app.server.ShutdownWithContext(ctx)
+	return err
 }
 
 // Server returns the underlying fasthttp server
@@ -864,13 +952,35 @@ func (app *App) Hooks() *Hooks {
 	return app.hooks
 }
 
+var ErrTestGotEmptyResponse = errors.New("test: got empty response")
+
+// TestConfig is a struct holding Test settings
+type TestConfig struct {
+	// Timeout defines the maximum duration a
+	// test can run before timing out.
+	// Default: time.Second
+	Timeout time.Duration
+
+	// FailOnTimeout specifies whether the test
+	// should return a timeout error if the HTTP response
+	// exceeds the Timeout duration.
+	// Default: true
+	FailOnTimeout bool
+}
+
 // Test is used for internal debugging by passing a *http.Request.
-// Timeout is optional and defaults to 1s, -1 will disable it completely.
-func (app *App) Test(req *http.Request, timeout ...time.Duration) (*http.Response, error) {
-	// Set timeout
-	to := 1 * time.Second
-	if len(timeout) > 0 {
-		to = timeout[0]
+// Config is optional and defaults to a 1s error on timeout,
+// 0 timeout will disable it completely.
+func (app *App) Test(req *http.Request, config ...TestConfig) (*http.Response, error) {
+	// Default config
+	cfg := TestConfig{
+		Timeout:       time.Second,
+		FailOnTimeout: true,
+	}
+
+	// Override config if provided
+	if len(config) > 0 {
+		cfg = config[0]
 	}
 
 	// Add Content-Length if not provided with body
@@ -895,7 +1005,7 @@ func (app *App) Test(req *http.Request, timeout ...time.Duration) (*http.Respons
 	app.startupProcess()
 
 	// Serve conn to server
-	channel := make(chan error)
+	channel := make(chan error, 1)
 	go func() {
 		var returned bool
 		defer func() {
@@ -909,12 +1019,15 @@ func (app *App) Test(req *http.Request, timeout ...time.Duration) (*http.Respons
 	}()
 
 	// Wait for callback
-	if to >= 0 {
+	if cfg.Timeout > 0 {
 		// With timeout
 		select {
 		case err = <-channel:
-		case <-time.After(to):
-			return nil, fmt.Errorf("test: timeout error after %s", to)
+		case <-time.After(cfg.Timeout):
+			conn.Close() //nolint:errcheck // It is fine to ignore the error here
+			if cfg.FailOnTimeout {
+				return nil, os.ErrDeadlineExceeded
+			}
 		}
 	} else {
 		// Without timeout
@@ -922,7 +1035,7 @@ func (app *App) Test(req *http.Request, timeout ...time.Duration) (*http.Respons
 	}
 
 	// Check for errors
-	if err != nil && !errors.Is(err, fasthttp.ErrGetOnly) {
+	if err != nil && !errors.Is(err, fasthttp.ErrGetOnly) && !errors.Is(err, errTestConnClosed) {
 		return nil, err
 	}
 
@@ -932,6 +1045,9 @@ func (app *App) Test(req *http.Request, timeout ...time.Duration) (*http.Respons
 	// Convert raw http response to *http.Response
 	res, err := http.ReadResponse(buffer, req)
 	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, ErrTestGotEmptyResponse
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -962,7 +1078,11 @@ func (app *App) init() *App {
 	}
 
 	// fasthttp server settings
-	app.server.Handler = app.requestHandler
+	if app.newCtxFunc != nil {
+		app.server.Handler = app.customRequestHandler
+	} else {
+		app.server.Handler = app.defaultRequestHandler
+	}
 	app.server.Name = app.config.ServerHeader
 	app.server.Concurrency = app.config.Concurrency
 	app.server.NoDefaultDate = app.config.DisableDefaultDate

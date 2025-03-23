@@ -14,6 +14,11 @@ import (
 	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
 
+type disableLogger struct{}
+
+func (*disableLogger) Printf(string, ...any) {
+}
+
 var ctxPool = sync.Pool{
 	New: func() any {
 		return new(fasthttp.RequestCtx)
@@ -29,7 +34,7 @@ func HTTPHandlerFunc(h http.HandlerFunc) fiber.Handler {
 func HTTPHandler(h http.Handler) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		handler := fasthttpadaptor.NewFastHTTPHandler(h)
-		handler(c.Context())
+		handler(c.RequestCtx())
 		return nil
 	}
 }
@@ -38,7 +43,7 @@ func HTTPHandler(h http.Handler) fiber.Handler {
 // forServer should be set to true when the http.Request is going to be passed to a http.Handler.
 func ConvertRequest(c fiber.Ctx, forServer bool) (*http.Request, error) {
 	var req http.Request
-	if err := fasthttpadaptor.ConvertRequest(c.Context(), &req, forServer); err != nil {
+	if err := fasthttpadaptor.ConvertRequest(c.RequestCtx(), &req, forServer); err != nil {
 		return nil, err //nolint:wrapcheck // This must not be wrapped
 	}
 	return &req, nil
@@ -96,12 +101,14 @@ func HTTPMiddleware(mw func(http.Handler) http.Handler) fiber.Handler {
 			c.Request().SetHost(r.Host)
 			c.Request().Header.SetHost(r.Host)
 
+			// Remove all cookies before setting, see https://github.com/valyala/fasthttp/pull/1864
+			c.Request().Header.DelAllCookies()
 			for key, val := range r.Header {
 				for _, v := range val {
 					c.Request().Header.Set(key, v)
 				}
 			}
-			CopyContextToFiberContext(r.Context(), c.Context())
+			CopyContextToFiberContext(r.Context(), c.RequestCtx())
 		})
 
 		if err := HTTPHandler(mw(nextHandler))(c); err != nil {
@@ -156,7 +163,7 @@ func handlerFunc(app *fiber.App, h ...fiber.Handler) http.HandlerFunc {
 			}
 		}
 
-		if _, _, err := net.SplitHostPort(r.RemoteAddr); err != nil && err.(*net.AddrError).Err == "missing port in address" { //nolint:errorlint, forcetypeassert // overlinting
+		if _, _, err := net.SplitHostPort(r.RemoteAddr); err != nil && err.(*net.AddrError).Err == "missing port in address" { //nolint:errorlint,forcetypeassert,errcheck // overlinting
 			r.RemoteAddr = net.JoinHostPort(r.RemoteAddr, "80")
 		}
 
@@ -171,7 +178,7 @@ func handlerFunc(app *fiber.App, h ...fiber.Handler) http.HandlerFunc {
 		fctx.Response.Reset()
 		fctx.Request.Reset()
 		defer ctxPool.Put(fctx)
-		fctx.Init(req, remoteAddr, nil)
+		fctx.Init(req, remoteAddr, &disableLogger{})
 
 		if len(h) > 0 {
 			// New fiber Ctx
