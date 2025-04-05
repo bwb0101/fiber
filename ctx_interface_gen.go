@@ -345,9 +345,9 @@ type Ctx interface {
 	release()
 	getBody() []byte
 	// Methods to use with next stack.
-	getMethodINT() int
+	getMethodInt() int
 	getIndexRoute() int
-	getTreePath() string
+	getTreePathHash() int
 	getDetectionPath() string
 	getPathOriginal() string
 	getValues() *[maxParams]string
